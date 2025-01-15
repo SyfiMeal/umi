@@ -6,6 +6,7 @@ import type {
 } from '@umijs/bundler-utils/compiled/esbuild';
 import type { Express, RequestHandler, webpack } from '@umijs/bundler-webpack';
 import type WebpackChain from '@umijs/bundler-webpack/compiled/webpack-5-chain';
+import { createWebSocketServer } from '@umijs/bundler-webpack/dist/server/ws';
 import type { IConfig } from '@umijs/bundler-webpack/dist/types';
 import type {
   IAdd,
@@ -16,6 +17,7 @@ import type {
   PluginAPI,
 } from '@umijs/core';
 import { Env } from '@umijs/core';
+import type { Declaration } from '@umijs/es-module-parser';
 import type { getMarkup } from '@umijs/server';
 import type { CheerioAPI } from '@umijs/utils/compiled/cheerio';
 import type { InlineConfig as ViteInlineConfig } from 'vite';
@@ -79,6 +81,17 @@ export interface IOnGenerateFiles {
   files?: IFileInfo | null;
   isFirstTime?: boolean;
 }
+export interface IUIMenu {
+  path: string;
+  url: string;
+  icon: string;
+  name: string;
+}
+export interface IUIModule {
+  name: string;
+  menus?: IUIMenu[];
+  [key: string]: any;
+}
 export type GenerateFilesFn = (opts: IOnGenerateFiles) => Promise<void>;
 export type OnConfigChangeFn = (opts: {
   generate: GenerateFilesFn;
@@ -109,12 +122,14 @@ export type IApi = PluginAPI &
     addRuntimePlugin: IAdd<null, string>;
     addRuntimePluginKey: IAdd<null, string>;
     addTmpGenerateWatcherPaths: IAdd<null, string>;
+    addUIModules: IAdd<null, IUIModule[]>;
     chainWebpack: {
       (fn: {
         (
           memo: WebpackChain,
           args: {
             env: Env;
+            ssr?: boolean;
             webpack: typeof webpack;
           },
         ): void;
@@ -134,6 +149,7 @@ export type IApi = PluginAPI &
     modifyRendererPath: IModify<string, {}>;
     modifyRoutes: IModify<Record<string, IRoute>, {}>;
     modifyServerRendererPath: IModify<string, {}>;
+    modifyTSConfig: IModify<Record<string, any>, {}>;
     modifyViteConfig: IModify<
       ViteInlineConfig,
       {
@@ -190,6 +206,7 @@ export type IApi = PluginAPI &
       isFirstCompile: boolean;
       stats: webpack.Stats;
       time: number;
+      ws?: ReturnType<typeof createWebSocketServer>;
     }>;
     onGenerateFiles: IEvent<IOnGenerateFiles>;
     onPatchRoute: IEvent<{
@@ -200,6 +217,7 @@ export type IApi = PluginAPI &
       origin: Record<string, any>;
     }>;
     onPrepareBuildSuccess: IEvent<{
+      fileImports?: Record<string, Declaration[]>;
       isWatch: boolean;
       result: ESBuildBuildResult;
     }>;

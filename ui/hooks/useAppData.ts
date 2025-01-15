@@ -1,7 +1,9 @@
 import type { BuildResult } from '@umijs/bundler-utils/compiled/esbuild';
 import { useQuery } from 'umi';
 
-interface IRoute {
+export interface IRoute {
+  name?: string;
+  redirect?: string;
   path: string;
   id: string;
   parentId?: string;
@@ -13,13 +15,29 @@ interface IRoute {
   __isJSFile?: boolean;
 }
 
-interface IAppData {
+export interface IPlugin {
+  config: Record<string, any>;
+  cwd: string;
+  enableBy: string;
+  id: string;
+  key: string;
+  path: string;
+  time: {
+    register: number;
+    hooks: Record<string, number[]>;
+  };
+  type: string;
+}
+
+export interface IAppData {
   cwd: string;
   pkg: {
     [key: string]: any;
   };
   pkgPath: string;
-  plugins: any[];
+  plugins: {
+    [key: string]: IPlugin;
+  };
   presets: any[];
   name: string;
   args: {
@@ -86,6 +104,18 @@ interface IAppData {
   ip: string;
   prepare: {
     buildResult: BuildResult;
+  };
+  ui: {
+    modules: {
+      name: string;
+      menus?: {
+        path: string;
+        url: string;
+        icon: string;
+        name: string;
+      }[];
+      [key: string]: any;
+    }[];
   };
 }
 

@@ -4,11 +4,17 @@ export default (api: IApi) => {
   api.describe({
     key: 'vite',
     config: {
-      schema(Joi) {
-        return Joi.object();
+      schema({ zod }) {
+        return zod.object({});
       },
     },
     enableBy: api.EnableBy.config,
+  });
+
+  api.modifyAppData((memo) => {
+    memo.bundler = 'vite';
+
+    return memo;
   });
 
   api.modifyConfig((memo) => {

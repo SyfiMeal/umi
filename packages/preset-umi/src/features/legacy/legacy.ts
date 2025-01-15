@@ -19,12 +19,14 @@ export default (api: IApi) => {
   api.describe({
     key: 'legacy',
     config: {
-      schema(Joi) {
-        return Joi.object({
-          buildOnly: Joi.boolean(),
-          nodeModulesTransform: Joi.boolean(),
-          checkOutput: Joi.boolean(),
-        });
+      schema({ zod }) {
+        return zod
+          .object({
+            buildOnly: zod.boolean(),
+            nodeModulesTransform: zod.boolean(),
+            checkOutput: zod.boolean(),
+          })
+          .deepPartial();
       },
     },
     enableBy: api.EnableBy.config,
@@ -130,9 +132,10 @@ export default (api: IApi) => {
       memo.cssMinifier = CSSMinifier.cssnano;
 
       // specify a low-compatibility target for babel transform
+      const ieTarget = userConfig.targets?.ie || api.config.targets?.ie || 11;
       memo.targets = {
         ...userConfig.targets,
-        ie: 11,
+        ie: ieTarget,
       };
 
       logger.info(

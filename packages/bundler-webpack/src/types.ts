@@ -87,6 +87,7 @@ export interface IConfig {
   jsMinifier?: `${JSMinifier}`;
   jsMinifierOptions?: { [key: string]: any };
   lessLoader?: { [key: string]: any };
+  normalCSSLoaderModules?: { [key: string]: any };
   outputPath?: string;
   postcssLoader?: { [key: string]: any };
   proxy?: { [key: string]: ProxyOptions } | ProxyOptions[];
@@ -103,6 +104,7 @@ export interface IConfig {
   babelLoaderCustomize?: string;
   analyze?: BundleAnalyzerPlugin.Options;
   esbuildMinifyIIFE?: boolean;
+  checkDepCssModules?: boolean;
   [key: string]: any;
 }
 

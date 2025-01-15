@@ -27,6 +27,7 @@ import { Hook } from './hook';
 import { getPaths } from './path';
 import { Plugin } from './plugin';
 import { PluginAPI } from './pluginAPI';
+import { noopStorage, Telemetry } from './telemetry';
 
 interface IOpts {
   cwd: string;
@@ -51,8 +52,13 @@ export class Service {
     >;
     framework?: IFrameworkType;
     prepare?: {
-      buildResult: BuildResult;
+      buildResult: Omit<BuildResult, 'outputFiles'>;
+      fileImports?: Record<string, Declaration[]>;
     };
+    mpa?: {
+      entry?: { [key: string]: string }[];
+    };
+    bundler?: string;
     [key: string]: any;
   } = {};
   args: yParser.Arguments = { _: [], $0: '' };
@@ -91,6 +97,7 @@ export class Service {
     [key: string]: any;
   } = {};
   pkgPath: string = '';
+  telemetry = new Telemetry();
 
   constructor(opts: IOpts) {
     this.cwd = opts.cwd;
@@ -267,7 +274,7 @@ export class Service {
     this.pkg = pkg;
     this.pkgPath = pkgPath || join(this.cwd, 'package.json');
 
-    const prefix = this.opts.frameworkName || DEFAULT_FRAMEWORK_NAME;
+    const prefix = this.frameworkName;
     const specifiedEnv = process.env[`${prefix}_ENV`.toUpperCase()];
     // https://github.com/umijs/umi/pull/9105
     // assert(
@@ -349,6 +356,13 @@ export class Service {
       key: 'modifyPaths',
       initialValue: this.paths,
     });
+
+    const storage = await this.applyPlugins({
+      key: 'modifyTelemetryStorage',
+      initialValue: noopStorage,
+    });
+
+    this.telemetry.useStorage(storage);
     // applyPlugin collect app data
     // TODO: some data is mutable
     this.stage = ServiceStage.collectAppData;
@@ -403,7 +417,7 @@ export class Service {
     const paths = getPaths({
       cwd: this.cwd,
       env: this.env,
-      prefix: this.opts.frameworkName || DEFAULT_FRAMEWORK_NAME,
+      prefix: this.frameworkName,
     });
     return paths;
   }
@@ -661,6 +675,10 @@ export class Service {
       console.log();
     }
   }
+
+  get frameworkName() {
+    return this.opts.frameworkName || DEFAULT_FRAMEWORK_NAME;
+  }
 }
 
 export interface IServicePluginAPI {
@@ -687,6 +705,7 @@ export interface IServicePluginAPI {
   >;
   modifyDefaultConfig: IModify<typeof Service.prototype.config, null>;
   modifyPaths: IModify<typeof Service.prototype.paths, null>;
+  modifyTelemetryStorage: IModify<typeof Service.prototype.telemetry, null>;
 
   ApplyPluginsType: typeof ApplyPluginsType;
   ConfigChangeType: typeof ConfigChangeType;
@@ -696,3 +715,63 @@ export interface IServicePluginAPI {
   registerPresets: (presets: any[]) => void;
   registerPlugins: (plugins: (Plugin | {})[]) => void;
 }
+
+// this is manually copied from @umijs/es-module-parser
+type DeclareKind = 'value' | 'type';
+type Declaration =
+  | {
+      type: 'ImportDeclaration';
+      source: string;
+      specifiers: Array<SimpleImportSpecifier>;
+      importKind: DeclareKind;
+      start: number;
+      end: number;
+    }
+  | {
+      type: 'DynamicImport';
+      source: string;
+      start: number;
+      end: number;
+    }
+  | {
+      type: 'ExportNamedDeclaration';
+      source: string;
+      specifiers: Array<SimpleExportSpecifier>;
+      exportKind: DeclareKind;
+      start: number;
+      end: number;
+    }
+  | {
+      type: 'ExportAllDeclaration';
+      source: string;
+      start: number;
+      end: number;
+    };
+type SimpleImportSpecifier =
+  | {
+      type: 'ImportDefaultSpecifier';
+      local: string;
+    }
+  | {
+      type: 'ImportNamespaceSpecifier';
+      local: string;
+      imported: string;
+    }
+  | {
+      type: 'ImportNamespaceSpecifier';
+      local?: string;
+    };
+type SimpleExportSpecifier =
+  | {
+      type: 'ExportDefaultSpecifier';
+      exported: string;
+    }
+  | {
+      type: 'ExportNamespaceSpecifier';
+      exported?: string;
+    }
+  | {
+      type: 'ExportSpecifier';
+      exported: string;
+      local: string;
+    };

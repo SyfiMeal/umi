@@ -2,12 +2,7 @@ import { winPath } from '@umijs/utils';
 import { existsSync, lstatSync, readdirSync, statSync } from 'fs';
 import { extname, relative, resolve } from 'path';
 import { defineRoutes } from './defineRoutes';
-import {
-  byLongestFirst,
-  createRouteId,
-  findParentRouteId,
-  isRouteModuleFile,
-} from './utils';
+import { byLongestFirst, createRouteId, isRouteModuleFile } from './utils';
 
 // opts.base: path of pages
 export function getConventionRoutes(opts: {
@@ -30,11 +25,22 @@ export function getConventionRoutes(opts: {
   });
 
   const routeIds = Object.keys(files).sort(byLongestFirst);
-
+  const parentToChildrenMap = new Map();
+  routeIds.forEach((id) => {
+    const prefix = `${id}/`;
+    routeIds
+      .filter((childId) => childId.startsWith(prefix) && childId !== id)
+      .forEach((childId) => {
+        if (!parentToChildrenMap.has(id)) {
+          parentToChildrenMap.set(id, []);
+        }
+        parentToChildrenMap.get(id).push(childId);
+      });
+  });
   function defineNestedRoutes(defineRoute: any, parentId?: string) {
-    const childRouteIds = routeIds.filter(
-      (id) => findParentRouteId(routeIds, id) === parentId,
-    );
+    const childRouteIds = parentId
+      ? parentToChildrenMap.get(parentId) || []
+      : routeIds;
     for (let routeId of childRouteIds) {
       let routePath = createRoutePath(
         parentId ? routeId.slice(parentId.length + 1) : routeId,
@@ -87,8 +93,11 @@ function createRoutePath(routeId: string): string {
     // routes/not.nested -> routes/not/nested
     .replace(/\./g, '/');
 
-  // /index/index -> ''
-  path = /\b\/?index\/index$/.test(path) ? path.replace(/\/?index$/, '') : path;
+  // only replace two `index` in the end of path
+  // /index/index -> '/index'
+  // index/index -> 'index'
+  // a-index/index -> 'a-index/index'
+  path = /(^|\/)index\/index$/.test(path) ? path.replace(/\/index$/, '') : path;
   // /(?<!:)\/?\bindex$/
   // e/index true
   // index true

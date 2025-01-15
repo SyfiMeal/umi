@@ -4,7 +4,7 @@ import { build } from './build';
 const fixtures = path.join(__dirname, '../../../fixtures/prepare-build');
 
 test('build', async () => {
-  const res = await build({
+  const [res] = await build({
     entryPoints: [path.join(fixtures, 'normal/index.ts')],
     config: {
       cwd: path.join(fixtures, 'normal'),
@@ -18,6 +18,9 @@ test('build', async () => {
   expect(text).toContain(`import "./a.html"`);
   expect(text).toContain(`var bar = "bar"`);
   expect(text).toContain(`var foo = "foo"`);
+
+  expect(text).toContain(`__decorateParam(0, tsProp())`);
+  expect(text).toContain(`__decorateParam(0, prop())`);
 });
 
 test('build with alias', async () => {

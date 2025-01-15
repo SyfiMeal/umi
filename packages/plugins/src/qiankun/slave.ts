@@ -5,6 +5,7 @@ import {
 } from '@umijs/bundler-utils/compiled/express';
 import {
   createProxyMiddleware,
+  Options,
   // @ts-ignore 现在打包好的 http-proxy-middleware 有导出 responseInterceptor，但没有导出声明
   responseInterceptor,
 } from '@umijs/bundler-utils/compiled/http-proxy-middleware';
@@ -32,7 +33,7 @@ function handleOriginalHtml(
   microAppEntry: string,
   originalHtml: string,
 ) {
-  const appName = api.pkg.name;
+  const appName = api.config.qiankun?.slave?.appName || api.pkg.name;
   assert(
     appName,
     '[@umijs/plugin-qiankun]: You should have name in package.json',
@@ -179,9 +180,19 @@ export interface IRuntimeConfig {
         ];
   });
 
-  api.chainWebpack((config) => {
+  api.chainWebpack((config, { ssr }) => {
+    // ssr 场景下，通过 cjs 的方式来使用模块，跳过 umd方式的构建
+    if (ssr) {
+      return;
+    }
     assert(api.pkg.name, 'You should have name in package.json.');
-    const { shouldNotAddLibraryChunkName } = (api.config.qiankun || {}).slave!;
+    // 默认不修改 library chunk 的 name，从而确保可以通过 window[appName] 访问到导出
+    // mfsu 关闭的时候才可以修改，否则可能导致配合 mfsu 时，子应用的 umd chunk 无法被正确加载
+    // mfsu 线上不会开启，所以这里只需要判断本地是否开启即可
+    const {
+      shouldNotAddLibraryChunkName = api.env === 'production' ||
+        !Boolean(api.config.mfsu),
+    } = (api.config.qiankun || {}).slave!;
     config.output
       .libraryTarget('umd')
       .library(
@@ -216,11 +227,14 @@ export interface IRuntimeConfig {
 
   api.addEntryCode(() => [
     `
-export const bootstrap = qiankun_genBootstrap(render);
-export const mount = qiankun_genMount('${api.config.mountElementId}');
-export const unmount = qiankun_genUnmount('${api.config.mountElementId}');
-export const update = qiankun_genUpdate();
-if (!window.__POWERED_BY_QIANKUN__) {
+const qiankun_noop = () => new Error('qiankun lifecycle is not available for server runtime!');
+const isServer = typeof window === 'undefined';
+export const bootstrap = isServer ? qiankun_noop: qiankun_genBootstrap(render);
+export const mount = isServer ? qiankun_noop : qiankun_genMount('${api.config.mountElementId}');
+export const unmount = isServer ? qiankun_noop : qiankun_genUnmount('${api.config.mountElementId}');
+export const update = isServer ? qiankun_noop : qiankun_genUpdate();
+// 增加 ssr 的判断
+if (!isServer && !window.__POWERED_BY_QIANKUN__) {
   bootstrap().then(mount);
 }
     `,
@@ -302,15 +316,28 @@ export { MicroAppLink } from './MicroAppLink';
           key: 'onLocalProxyStart',
           type: api.ApplyPluginsType.event,
         });
+
+        // 新增一个 modifyLocalProxyOpts 事件，支持用户自定义本地 proxy 代理参数
+        const modifyLocalProxyOpts = ((await api.applyPlugins({
+          key: 'modifyLocalProxyOpts',
+          type: api.ApplyPluginsType.modify,
+          initialValue: {},
+        })) ?? {}) as Partial<Options>;
+
+        const localProxyOpts: Partial<Options> = {
+          target: masterEntry,
+          secure: false,
+          ignorePath: false,
+          followRedirects: false,
+          changeOrigin: true,
+          selfHandleResponse: true,
+          ...modifyLocalProxyOpts,
+        };
+
         return createProxyMiddleware(
           (pathname) => pathname !== '/local-dev-server',
           {
-            target: masterEntry,
-            secure: false,
-            ignorePath: false,
-            followRedirects: false,
-            changeOrigin: true,
-            selfHandleResponse: true,
+            ...localProxyOpts,
             onProxyReq(proxyReq) {
               api.applyPlugins({
                 key: 'onLocalProxyReq',
@@ -327,15 +354,26 @@ export { MicroAppLink } from './MicroAppLink';
                 res: any,
               ) => {
                 if (proxyRes.statusCode === 302) {
-                  const hostname = (req as Request).hostname;
+                  const { ignorePath = false } = localProxyOpts;
+                  // 应该使用原始请求的 goto 链接，而非 masterEntry
+                  const { hostname, url, protocol } = req as Request;
                   const port = process.env.PORT || api.appData?.port;
-                  const goto = `${hostname}:${port}`;
-                  const redirectUrl =
-                    proxyRes.headers.location!.replace(
-                      encodeURIComponent(new URL(masterEntry).hostname),
-                      encodeURIComponent(goto),
-                    ) || masterEntry;
-
+                  // 如果代理时忽略了 path，则需要把原始请求的 path 拼接到 gotoBasePart 上
+                  const gotoBasePart = `${protocol}://${hostname}:${port}${
+                    ignorePath && url ? url : '/'
+                  }`;
+                  const fromBasePart = masterEntry;
+                  const locationUrl = proxyRes.headers.location || '';
+                  // 只替换 search 参数的部分
+                  const [originAndPath, searchParams] = locationUrl.split('?');
+                  // 替换时只用替换 url base part 部分
+                  const searchHandled = searchParams
+                    ? `?${searchParams.replace(
+                        encodeURIComponent(fromBasePart),
+                        encodeURIComponent(gotoBasePart),
+                      )}`
+                    : '';
+                  const redirectUrl = `${originAndPath}${searchHandled}`;
                   const redirectMessage = `[@umijs/plugin-qiankun]: redirect to ${redirectUrl}`;
 
                   api.logger.info(redirectMessage);

@@ -1,6 +1,6 @@
 {
   "name": "@umijs/ui",
-  "version": "3.0.0-alpha.0",
+  "version": "3.0.1",
   "description": "",
   "keywords": [],
   "homepage": "https://github.com/umijs/umi/tree/master/ui#readme",
@@ -13,18 +13,23 @@
   },
   "license": "MIT",
   "main": "dist/plugin.js",
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "umi build",
-    "dev": "umi dev --ui",
-    "setup": "umi setup"
+    "check:packageFiles": "umi-scripts checkPackageFiles",
+    "release": "tsx ../scripts/releasePackage.ts --pkg ui",
+    "setup": "umi setup",
+    "ui:build": "umi build",
+    "ui:dev": "umi dev --ui"
   },
   "devDependencies": {
+    "@antv/g6": "^4.8.7",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "@umijs/bundler-utils": "workspace:*",
-    "@umijs/plugins": "workspace:*",
-    "typescript": "^4",
-    "umi": "workspace:*"
+    "antd": "^5.2.3",
+    "rc-virtual-list": "^3.4.13",
+    "react-json-view": "^1.21.3"
   },
   "packageManager": "pnpm@7.3.0",
   "publishConfig": {

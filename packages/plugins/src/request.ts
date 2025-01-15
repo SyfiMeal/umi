@@ -6,17 +6,14 @@ export default (api: IApi) => {
   api.describe({
     key: 'request',
     config: {
-      schema: (Joi) => {
+      schema: ({ zod }) => {
         // 生成类型 dataField: '' | string
-        return Joi.alternatives().try(
-          Joi.object({
-            dataField: Joi.alternatives().try(
-              Joi.string().allow(''),
-              Joi.string(),
-            ),
-          }),
-          Joi.boolean().invalid(true),
-        );
+        return zod
+          .object({
+            // TODO: '' | string 没有找到对应的写法
+            dataField: zod.string(),
+          })
+          .partial();
       },
     },
     enableBy: api.EnableBy.config,
@@ -135,12 +132,13 @@ type RequestError = AxiosError | Error
 interface IErrorHandler {
   (error: RequestError, opts: IRequestOptions): void;
 }
-type IRequestInterceptorAxios = (config: RequestOptions) => RequestOptions;
-type IRequestInterceptorUmiRequest = (url: string, config : RequestOptions) => { url: string, options: RequestOptions };
+type WithPromise<T> = T | Promise<T>;
+type IRequestInterceptorAxios = (config: IRequestOptions) => WithPromise<IRequestOptions>;
+type IRequestInterceptorUmiRequest = (url: string, config : IRequestOptions) => WithPromise<{ url: string, options: IRequestOptions }>;
 type IRequestInterceptor = IRequestInterceptorAxios | IRequestInterceptorUmiRequest;
 type IErrorInterceptor = (error: Error) => Promise<Error>;
-type IResponseInterceptor = <T = any>(response : AxiosResponse<T>) => AxiosResponse<T> ;
-type IRequestInterceptorTuple = [IRequestInterceptor , IErrorInterceptor] | [ IRequestInterceptor ] | IRequestInterceptor
+type IResponseInterceptor = <T = any>(response : AxiosResponse<T>) => WithPromise<AxiosResponse<T>> ;
+type IRequestInterceptorTuple = [IRequestInterceptor , IErrorInterceptor] | [IRequestInterceptor] | IRequestInterceptor
 type IResponseInterceptorTuple = [IResponseInterceptor, IErrorInterceptor] | [IResponseInterceptor] | IResponseInterceptor
 
 export interface RequestConfig<T = any> extends AxiosRequestConfig {
@@ -171,19 +169,19 @@ const getRequestInstance = (): AxiosInstance => {
 
   config?.requestInterceptors?.forEach((interceptor) => {
     if(interceptor instanceof Array){
-      requestInstance.interceptors.request.use((config) => {
+      requestInstance.interceptors.request.use(async (config) => {
         const { url } = config;
         if(interceptor[0].length === 2){
-          const { url: newUrl, options } = interceptor[0](url, config);
+          const { url: newUrl, options } = await interceptor[0](url, config);
           return { ...options, url: newUrl };
         }
         return interceptor[0](config);
       }, interceptor[1]);
     } else {
-      requestInstance.interceptors.request.use((config) => {
+      requestInstance.interceptors.request.use(async (config) => {
         const { url } = config;
         if(interceptor.length === 2){
-          const { url: newUrl, options } = interceptor(url, config);
+          const { url: newUrl, options } = await interceptor(url, config);
           return { ...options, url: newUrl };
         }
         return interceptor(config);
@@ -214,19 +212,19 @@ const request: IRequest = (url: string, opts: any = { method: 'GET' }) => {
   const { getResponse = false, requestInterceptors, responseInterceptors } = opts;
   const requestInterceptorsToEject = requestInterceptors?.map((interceptor) => {
     if(interceptor instanceof Array){
-      return requestInstance.interceptors.request.use((config) => {
+      return requestInstance.interceptors.request.use(async (config) => {
         const { url } = config;
         if(interceptor[0].length === 2){
-          const { url: newUrl, options } = interceptor[0](url, config);
+          const { url: newUrl, options } = await interceptor[0](url, config);
           return { ...options, url: newUrl };
         }
         return interceptor[0](config);
       }, interceptor[1]);
     } else {
-      return requestInstance.interceptors.request.use((config) => {
+      return requestInstance.interceptors.request.use(async (config) => {
         const { url } = config;
         if(interceptor.length === 2){
-          const { url: newUrl, options } = interceptor(url, config);
+          const { url: newUrl, options } = await interceptor(url, config);
           return { ...options, url: newUrl };
         }
         return interceptor(config);
@@ -283,6 +281,10 @@ export type {
   AxiosResponse,
   AxiosError,
   RequestError,
+  IRequestInterceptorAxios as RequestInterceptorAxios,
+  IRequestInterceptorUmiRequest as RequestInterceptorUmiRequest,
+  IRequestInterceptor as RequestInterceptor,
+  IErrorInterceptor as ErrorInterceptor,
   IResponseInterceptor as ResponseInterceptor,
   IRequestOptions as RequestOptions,
   IRequest as Request,
@@ -323,6 +325,10 @@ export type {
   AxiosResponse,
   AxiosError,
   RequestError,
+  RequestInterceptorAxios,
+  RequestInterceptorUmiRequest,
+  RequestInterceptor,
+  ErrorInterceptor,
   ResponseInterceptor,
   RequestOptions,
   Request } from './request';

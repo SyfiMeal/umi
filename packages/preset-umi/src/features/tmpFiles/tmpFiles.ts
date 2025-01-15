@@ -1,12 +1,12 @@
 import { importLazy, lodash, winPath } from '@umijs/utils';
 import { existsSync, readdirSync } from 'fs';
-import { basename, dirname, join } from 'path';
+import { basename, dirname, join, relative } from 'path';
 import { RUNTIME_TYPE_FILE_NAME } from 'umi';
+import { getMarkupArgs } from '../../commands/dev/getMarkupArgs';
 import { TEMPLATES_DIR } from '../../constants';
 import { IApi } from '../../types';
 import { getModuleExports } from './getModuleExports';
 import { importsToStr } from './importsToStr';
-
 const routesApi: typeof import('./routes') = importLazy(
   require.resolve('./routes'),
 );
@@ -17,11 +17,13 @@ export default (api: IApi) => {
   api.describe({
     key: 'tmpFiles',
     config: {
-      schema(Joi) {
-        return Joi.boolean();
+      schema({ zod }) {
+        return zod.boolean();
       },
     },
   });
+
+  const TSCONFIG_FILE_NAME = 'tsconfig.json';
 
   api.onGenerateFiles(async (opts) => {
     const rendererPath = winPath(
@@ -40,68 +42,84 @@ export default (api: IApi) => {
     );
 
     // tsconfig.json
+    const frameworkName = api.service.frameworkName;
     const srcPrefix = api.appData.hasSrcDir ? 'src/' : '';
-    const umiTempDir = `${srcPrefix}.umi`;
+    const umiTempDir = `${srcPrefix}.${frameworkName}`;
     const baseUrl = api.appData.hasSrcDir ? '../../' : '../';
+    const isTs5 = api.appData.typescript.tsVersion?.startsWith('5');
+    const isTslibInstalled = !!api.appData.typescript.tslibVersion;
+
+    // https://github.com/umijs/umi/issues/12545
+    const tsconfigFilePath = join(api.paths.absTmpPath, TSCONFIG_FILE_NAME);
+    const relativeUmiDirPath = winPath(
+      relative(dirname(tsconfigFilePath), umiDir),
+    );
+
+    // x 1、basic config
+    // x 2、alias
+    // 3、language service platform
+    // 4、typing
+    let umiTsConfig = {
+      compilerOptions: {
+        target: 'esnext',
+        module: 'esnext',
+        lib: ['dom', 'dom.iterable', 'esnext'],
+        allowJs: true,
+        skipLibCheck: true,
+        moduleResolution: isTs5 ? 'bundler' : 'node',
+        importHelpers: isTslibInstalled,
+        noEmit: true,
+        jsx: api.appData.framework === 'vue' ? 'preserve' : 'react-jsx',
+        esModuleInterop: true,
+        sourceMap: true,
+        baseUrl,
+        strict: true,
+        resolveJsonModule: true,
+        allowSyntheticDefaultImports: true,
+
+        // Supported by vue only
+        ...(api.appData.framework === 'vue'
+          ? {
+              // TODO Actually, it should be vite mode, but here it is written as vue only
+              // Required in Vite https://vitejs.dev/guide/features.html#typescript
+              isolatedModules: true,
+            }
+          : {}),
+
+        paths: {
+          '@/*': [`${srcPrefix}*`],
+          '@@/*': [`${umiTempDir}/*`],
+          [`${api.appData.umi.importSource}`]: [relativeUmiDirPath],
+          [`${api.appData.umi.importSource}/typings`]: [
+            `${umiTempDir}/typings`,
+          ],
+          ...(api.config.vite
+            ? {
+                '@fs/*': ['*'],
+              }
+            : {}),
+        },
+      },
+      include: [
+        `${baseUrl}.${frameworkName}rc.ts`,
+        `${baseUrl}.${frameworkName}rc.*.ts`,
+        `${baseUrl}**/*.d.ts`,
+        `${baseUrl}**/*.ts`,
+        `${baseUrl}**/*.tsx`,
+        api.appData.framework === 'vue' && `${baseUrl}**/*.vue`,
+      ].filter(Boolean),
+    };
+
+    umiTsConfig = await api.applyPlugins({
+      key: 'modifyTSConfig',
+      type: api.ApplyPluginsType.modify,
+      initialValue: umiTsConfig,
+    });
 
     api.writeTmpFile({
       noPluginDir: true,
-      path: 'tsconfig.json',
-      // x 1、basic config
-      // x 2、alias
-      // 3、language service platform
-      // 4、typing
-      content: JSON.stringify(
-        {
-          compilerOptions: {
-            target: 'esnext',
-            module: 'esnext',
-            moduleResolution: 'node',
-            importHelpers: true,
-            jsx: api.appData.framework === 'vue' ? 'preserve' : 'react-jsx',
-            esModuleInterop: true,
-            sourceMap: true,
-            baseUrl,
-            strict: true,
-            resolveJsonModule: true,
-            allowSyntheticDefaultImports: true,
-
-            // Supported by vue only
-            ...(api.appData.framework === 'vue'
-              ? {
-                  // TODO Actually, it should be vite mode, but here it is written as vue only
-                  // Required in Vite https://vitejs.dev/guide/features.html#typescript
-                  isolatedModules: true,
-                  // For `<script setup>`
-                  // See <https://devblogs.microsoft.com/typescript/announcing-typescript-4-5-beta/#preserve-value-imports>
-                  preserveValueImports: true,
-                }
-              : {}),
-
-            paths: {
-              '@/*': [`${srcPrefix}*`],
-              '@@/*': [`${umiTempDir}/*`],
-              [`${api.appData.umi.importSource}`]: [umiDir],
-              [`${api.appData.umi.importSource}/typings`]: [
-                `${umiTempDir}/typings`,
-              ],
-              ...(api.config.vite
-                ? {
-                    '@fs/*': ['*'],
-                  }
-                : {}),
-            },
-          },
-          include: [
-            `${baseUrl}.umirc.ts`,
-            `${baseUrl}**/*.d.ts`,
-            `${baseUrl}**/*.ts`,
-            `${baseUrl}**/*.tsx`,
-          ],
-        },
-        null,
-        2,
-      ),
+      path: TSCONFIG_FILE_NAME,
+      content: JSON.stringify(umiTsConfig, null, 2),
     });
 
     // typings.d.ts
@@ -251,7 +269,44 @@ declare module '*.txt' {
 }
 `.trimEnd(),
     });
+    const entryCode = (
+      await api.applyPlugins({
+        key: 'addEntryCode',
+        initialValue: [],
+      })
+    ).join('\n');
+    const entryCodeAhead = (
+      await api.applyPlugins({
+        key: 'addEntryCodeAhead',
+        initialValue: [],
+      })
+    ).join('\n');
+    const importsAhead = importsToStr(
+      await api.applyPlugins({
+        key: 'addEntryImportsAhead',
+        initialValue: [
+          api.appData.globalCSS.length && {
+            source: api.appData.globalCSS[0],
+          },
+          api.appData.globalJS.length && {
+            source: api.appData.globalJS[0],
+          },
+        ].filter(Boolean),
+      }),
+    ).join('\n');
+    const imports = importsToStr(
+      await api.applyPlugins({
+        key: 'addEntryImports',
+        initialValue: [],
+      }),
+    ).join('\n');
 
+    const ssrConfig = api.config.ssr;
+    const __INTERNAL_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = api.config.ssr
+      ?.__INTERNAL_DO_NOT_USE_OR_YOU_WILL_BE_FIRED ?? {
+      pureApp: false,
+      pureHtml: false,
+    };
     // umi.ts
     api.writeTmpFile({
       noPluginDir: true,
@@ -262,51 +317,23 @@ declare module '*.txt' {
         rendererPath,
         publicPath: api.config.publicPath,
         runtimePublicPath: api.config.runtimePublicPath ? 'true' : 'false',
-        entryCode: (
-          await api.applyPlugins({
-            key: 'addEntryCode',
-            initialValue: [],
-          })
-        ).join('\n'),
-        entryCodeAhead: (
-          await api.applyPlugins({
-            key: 'addEntryCodeAhead',
-            initialValue: [],
-          })
-        ).join('\n'),
+        entryCode,
+        entryCodeAhead,
         polyfillImports: importsToStr(
           await api.applyPlugins({
             key: 'addPolyfillImports',
             initialValue: [],
           }),
         ).join('\n'),
-        importsAhead: importsToStr(
-          await api.applyPlugins({
-            key: 'addEntryImportsAhead',
-            initialValue: [
-              api.appData.globalCSS.length && {
-                source: api.appData.globalCSS[0],
-              },
-              api.appData.globalJS.length && {
-                source: api.appData.globalJS[0],
-              },
-            ].filter(Boolean),
-          }),
-        ).join('\n'),
-        imports: importsToStr(
-          await api.applyPlugins({
-            key: 'addEntryImports',
-            initialValue: [
-              // append overrides.{ext} style file
-              api.appData.overridesCSS.length && {
-                source: api.appData.overridesCSS[0],
-              },
-            ].filter(Boolean),
-          }),
-        ).join('\n'),
+        importsAhead,
+        imports,
         basename: api.config.base,
         historyType: api.config.history.type,
-        hydrate: !!api.config.ssr,
+        __INTERNAL_DO_NOT_USE_OR_YOU_WILL_BE_FIRED: JSON.stringify(
+          __INTERNAL_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
+        ),
+        hydrate: !!ssrConfig,
+        useStream: ssrConfig?.useStream ?? true,
         reactRouter5Compat: !!api.config.reactRouter5Compat,
         loadingComponent: api.appData.globalLoading,
       },
@@ -370,19 +397,15 @@ export default function EmptyRoute() {
       headerImports.push(`import clientLoaders from './loaders.js';`);
     }
     // routeProps is enabled for conventional routes
-    if (!api.userConfig.routes) {
+    // e.g. dumi 需要用到约定式路由但又不需要 routeProps
+    if (!api.userConfig.routes && api.isPluginEnable('routeProps')) {
       // routeProps":"routeProps['foo']" > ...routeProps['foo']
       routesString = routesString.replace(
         /"routeProps":"(routeProps\[.*?)"/g,
         '...$1',
       );
       // import: route props
-      // why has this branch? since test env don't build routeProps.js
-      if (process.env.NODE_ENV === 'test') {
-        headerImports.push(`import routeProps from './routeProps';`);
-      } else {
-        headerImports.push(`import routeProps from './routeProps.js';`);
-      }
+      headerImports.push(`import routeProps from './routeProps';`);
       // prevent override internal route props
       headerImports.push(`
 if (process.env.NODE_ENV === 'development') {
@@ -425,9 +448,30 @@ if (process.env.NODE_ENV === 'development') {
       key: 'addRuntimePlugin',
       initialValue: [api.appData.appJS?.path].filter(Boolean),
     });
+
+    function checkDuplicatePluginKeys(arr: string[]) {
+      const duplicates: string[] = [];
+      arr.reduce<Record<string, boolean>>((prev, curr) => {
+        if (prev[curr]) {
+          duplicates.push(curr);
+        } else {
+          prev[curr] = true;
+        }
+        return prev;
+      }, {});
+      if (duplicates.length) {
+        throw new Error(
+          `The plugin key cannot be duplicated. (${duplicates.join(', ')})`,
+        );
+      }
+    }
+
     const validKeys = await api.applyPlugins({
       key: 'addRuntimePluginKey',
       initialValue: [
+        // why add default?
+        // ref: https://github.com/umijs/mako/issues/1026
+        ...(process.env.OKAM ? ['default'] : []),
         'patchRoutes',
         'patchClientRoutes',
         'modifyContextOpts',
@@ -442,6 +486,9 @@ if (process.env.NODE_ENV === 'development') {
         'onRouteChange',
       ],
     });
+
+    checkDuplicatePluginKeys(validKeys);
+
     const appPluginRegExp = /(\/|\\)app.(ts|tsx|jsx|js)$/;
     api.writeTmpFile({
       noPluginDir: true,
@@ -461,9 +508,12 @@ if (process.env.NODE_ENV === 'development') {
     });
 
     // umi.server.ts
-    if (api.config.ssr) {
+    if (ssrConfig) {
       const umiPluginPath = winPath(join(umiDir, 'client/client/plugin.js'));
       const umiServerPath = winPath(require.resolve('@umijs/server/dist/ssr'));
+
+      const mountElementId = api.config.mountElementId;
+
       const routesWithServerLoader = Object.keys(routes).reduce<
         { id: string; path: string }[]
       >((memo, id) => {
@@ -475,6 +525,8 @@ if (process.env.NODE_ENV === 'development') {
         }
         return memo;
       }, []);
+      const { headScripts, scripts, styles, title, favicons, links, metas } =
+        await getMarkupArgs({ api });
       api.writeTmpFile({
         noPluginDir: true,
         path: 'umi.server.ts',
@@ -484,7 +536,13 @@ if (process.env.NODE_ENV === 'development') {
             /"component": "await import\((.*)\)"/g,
             '"component": await import("$1")',
           ),
+          version: api.appData.umi.version,
+          reactVersion: api.appData.react.version,
+          entryCode,
+          entryCodeAhead,
           routesWithServerLoader,
+          importsAhead,
+          imports,
           umiPluginPath,
           serverRendererPath,
           umiServerPath,
@@ -493,6 +551,21 @@ if (process.env.NODE_ENV === 'development') {
             join(api.paths.absOutputPath, 'build-manifest.json'),
           ),
           env: JSON.stringify(api.env),
+          htmlPageOpts: JSON.stringify({
+            headScripts,
+            styles,
+            title,
+            favicons,
+            links,
+            metas,
+            scripts: scripts || [],
+          }),
+          __INTERNAL_DO_NOT_USE_OR_YOU_WILL_BE_FIRED: JSON.stringify(
+            __INTERNAL_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
+          ),
+          mountElementId,
+          basename: api.config.base,
+          useStream: ssrConfig?.useStream ?? true,
         },
       });
     }
@@ -500,7 +573,8 @@ if (process.env.NODE_ENV === 'development') {
     // history.ts
     // only react generates because the preset-vue override causes vite hot updates to fail
     if (api.appData.framework === 'react') {
-      const historyPath = api.config.historyWithQuery
+      const { historyWithQuery, reactRouter5Compat } = api.config;
+      const historyPath = historyWithQuery
         ? winPath(dirname(require.resolve('@umijs/history/package.json')))
         : rendererPath;
       api.writeTmpFile({
@@ -509,6 +583,7 @@ if (process.env.NODE_ENV === 'development') {
         tplPath: join(TEMPLATES_DIR, 'history.tpl'),
         context: {
           historyPath,
+          reactRouter5Compat,
         },
       });
       api.writeTmpFile({
@@ -517,6 +592,7 @@ if (process.env.NODE_ENV === 'development') {
         tplPath: join(TEMPLATES_DIR, 'historyIntelli.tpl'),
         context: {
           historyPath,
+          reactRouter5Compat,
         },
       });
     }
@@ -562,7 +638,9 @@ if (process.env.NODE_ENV === 'development') {
         }),
       );
 
-      const exports = [];
+      const exports: string[] = [];
+      const beforeExports: string[] = [];
+      const afterExports: string[] = [];
       const exportMembers = ['default'];
       // @umijs/renderer-react
       exports.push('// @umijs/renderer-*');
@@ -575,7 +653,9 @@ if (process.env.NODE_ENV === 'development') {
           })
         ).join(', ')} } from '${rendererPath}';`,
       );
-      exports.push(`export type {  History } from '${rendererPath}'`);
+      exports.push(
+        `export type { History, ClientLoader } from '${rendererPath}'`,
+      );
       // umi/client/client/plugin
       exports.push('// umi/client/client/plugin');
       const umiPluginPath = winPath(join(umiDir, 'client/client/plugin.js'));
@@ -609,11 +689,27 @@ if (process.env.NODE_ENV === 'development') {
           // development is for TestBrowser's type
           process.env.NODE_ENV === 'development'
         ) {
-          exports.push(`export { TestBrowser } from './testBrowser';`);
+          // `TestBrowser` is a circular dependency, we export it last
+          afterExports.push(
+            `// test`,
+            `export { TestBrowser } from './testBrowser';`,
+          );
+        }
+      }
+      if (api.appData.framework === 'react') {
+        exports.push('// react ssr');
+        if (api.config.ssr) {
+          exports.push(
+            `export { useServerInsertedHTML } from './core/serverInsertedHTMLContext';`,
+          );
+        } else {
+          exports.push(
+            `export const useServerInsertedHTML: Function = () => {};`,
+          );
         }
       }
       // plugins
-      exports.push('// plugins');
+      beforeExports.push('// plugins');
       const allPlugins = readdirSync(api.paths.absTmpPath).filter((file) =>
         file.startsWith('plugin-'),
       );
@@ -639,7 +735,7 @@ if (process.env.NODE_ENV === 'development') {
           exportMembers,
         });
         if (pluginExports.length) {
-          exports.push(
+          beforeExports.push(
             `export { ${pluginExports.join(', ')} } from '${winPath(
               join(api.paths.absTmpPath, plugin),
             )}';`,
@@ -648,13 +744,13 @@ if (process.env.NODE_ENV === 'development') {
       }
 
       // plugins types.ts
-      exports.push('// plugins types.d.ts');
+      beforeExports.push('// plugins types.d.ts');
       for (const plugin of allPlugins) {
         const file = winPath(join(api.paths.absTmpPath, plugin, 'types.d.ts'));
         if (existsSync(file)) {
           // 带 .ts 后缀的声明文件 会导致声明失效
           const noSuffixFile = file.replace(/\.ts$/, '');
-          exports.push(`export * from '${noSuffixFile}';`);
+          beforeExports.push(`export * from '${noSuffixFile}';`);
         }
       }
       // plugins runtimeConfig.d.ts
@@ -693,7 +789,9 @@ if (process.env.NODE_ENV === 'development') {
       //        we will get a `defineApp` of `undefined`
       // https://github.com/umijs/umi/issues/9702
       // https://github.com/umijs/umi/issues/10412
-      exports.unshift(
+      beforeExports.unshift(
+        // `app.ts` should be in the first, otherwise it will be circular dependency
+        `// defineApp`,
         `export { defineApp } from './core/defineApp'`,
         // https://javascript.plainenglish.io/leveraging-type-only-imports-and-exports-with-typescript-3-8-5c1be8bd17fb
         `export type { RuntimeConfig } from './core/defineApp'`,
@@ -701,7 +799,7 @@ if (process.env.NODE_ENV === 'development') {
       api.writeTmpFile({
         noPluginDir: true,
         path: 'exports.ts',
-        content: exports.join('\n'),
+        content: [...beforeExports, ...exports, ...afterExports].join('\n'),
       });
     },
     stage: 10000,

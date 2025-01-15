@@ -9,12 +9,18 @@ function createRouteMiddleware(opts: { api: IApi }) {
     let webpackStats: Stats | null = null;
     let onStats: Function | null = null;
 
-    compiler.hooks.done.tap('umiRouteMiddleware', (stats: any) => {
+    compiler?.hooks.done.tap('umiRouteMiddleware', (stats: any) => {
       webpackStats = stats;
       onStats?.(stats);
     });
 
-    async function getStats() {
+    async function getStats(api: IApi) {
+      if (!compiler && api.config.mako) {
+        return {
+          compilation: { assets: { 'umi.js': 'umi.js', 'umi.css': 'umi.css' } },
+          hasErrors: () => false,
+        };
+      }
       if (webpackStats) return Promise.resolve(webpackStats);
       return new Promise((resolve) => {
         onStats = (stats: any) => {
@@ -26,12 +32,11 @@ function createRouteMiddleware(opts: { api: IApi }) {
     return async (req, res, next) => {
       const markupArgs = (await getMarkupArgs(opts)) as any;
       let assetsMap: Record<string, string[]> = {};
-      const stats: any = await getStats();
+      const stats: any = await getStats(opts.api);
       assetsMap = getAssetsMap({
         stats,
         publicPath: opts.api.config.publicPath!,
       });
-
       const requestHandler = await createRequestHandler({
         ...markupArgs,
         styles: markupArgs.styles.concat(

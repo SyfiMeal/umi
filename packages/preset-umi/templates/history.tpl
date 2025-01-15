@@ -16,6 +16,12 @@ export function createHistory(opts: any) {
     basename = opts.basename;
   }
 
+{{#reactRouter5Compat}}
+  h.goBack = function() {
+    h.back();
+  };
+{{/reactRouter5Compat}}
+
   history = {
     ...h,
     push(to, state) {
@@ -33,6 +39,12 @@ export function createHistory(opts: any) {
   }
 
   return h;
+}
+
+export function setHistory(h: UmiHistory) {
+  if (h) {
+    history = h;
+  }
 }
 
 // Patch `to` to support basename

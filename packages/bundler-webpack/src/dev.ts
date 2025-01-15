@@ -1,5 +1,5 @@
 import { MFSU, MF_DEP_PREFIX } from '@umijs/mfsu';
-import { importLazy, logger, rimraf } from '@umijs/utils';
+import { importLazy, lodash, logger, rimraf } from '@umijs/utils';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import type { Worker } from 'worker_threads';
@@ -38,6 +38,7 @@ type IOpts = {
   srcCodeCache?: any;
   startBuildWorker?: (deps: any[]) => Worker;
   onBeforeMiddleware?: Function;
+  disableCopy?: boolean;
 } & Pick<IConfigOpts, 'cache' | 'pkg'>;
 
 export function ensureSerializableValue(obj: any) {
@@ -45,7 +46,7 @@ export function ensureSerializableValue(obj: any) {
     JSON.stringify(
       obj,
       (_key, value) => {
-        if (typeof value === 'function') {
+        if (typeof value === 'function' || lodash.isRegExp(value)) {
           return value.toString();
         }
         return value;
@@ -154,6 +155,9 @@ export async function setup(opts: IOpts) {
         }
       : undefined,
     pkg: opts.pkg,
+    disableCopy: opts.disableCopy,
+    port: opts.port,
+    host: opts.host,
   });
 
   const depConfig = await configModule.getConfig({
@@ -161,7 +165,7 @@ export async function setup(opts: IOpts) {
     rootDir: opts.rootDir,
     env: Env.development,
     entry: opts.entry,
-    userConfig: opts.config,
+    userConfig: { ...opts.config, forkTSChecker: false },
     disableCopy: true,
     hash: true,
     staticPathPrefix: MF_DEP_PREFIX,
@@ -173,6 +177,8 @@ export async function setup(opts: IOpts) {
       cacheDirectory: join(cacheDirectoryPath, 'mfsu-deps'),
     },
     pkg: opts.pkg,
+    port: opts.port,
+    host: opts.host,
   });
 
   webpackConfig.resolve!.alias ||= {};

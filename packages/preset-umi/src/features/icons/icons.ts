@@ -3,6 +3,7 @@ import {
   importLazy,
   installWithNpmClient,
   logger,
+  winPath,
 } from '@umijs/utils';
 import fs from 'fs';
 import path from 'path';
@@ -18,15 +19,17 @@ export default (api: IApi) => {
 
   api.describe({
     config: {
-      schema(Joi) {
-        return Joi.object({
-          // don't support tnpm
-          autoInstall: Joi.object(),
-          defaultComponentConfig: Joi.object(),
-          // e.g. alias: { home: 'fa:home' }
-          alias: Joi.object(),
-          include: Joi.array().items(Joi.string()),
-        });
+      schema({ zod }) {
+        return zod
+          .object({
+            // don't support tnpm
+            autoInstall: zod.object({}),
+            defaultComponentConfig: zod.object({}),
+            // e.g. alias: { home: 'fa:home' }
+            alias: zod.object({}),
+            include: zod.array(zod.string()),
+          })
+          .deepPartial();
       },
     },
     enableBy: api.EnableBy.config,
@@ -117,6 +120,9 @@ export default (api: IApi) => {
         }
       }
     }
+    if (code.length) {
+      code.unshift("import React from 'react';");
+    }
     api.writeTmpFile({
       path: 'icons.tsx',
       content: code.join('\n') || EMPTY_ICONS_FILE,
@@ -133,10 +139,10 @@ export default (api: IApi) => {
     }
     const localIconDir = getLocalIconDir();
     const localIcons: string[] = [];
+
     if (fs.existsSync(localIconDir)) {
       localIcons.push(
-        ...fs
-          .readdirSync(localIconDir)
+        ...readIconsFromDir(localIconDir)
           .filter((file) => file.endsWith('.svg'))
           .map((file) => file.replace(/\.svg$/, '')),
       );
@@ -281,6 +287,7 @@ type IconCollections = 'academicons' |
   'subway' |
   'svg-spinners' |
   'system-uicons' |
+  'solar' |
   'tabler' |
   'teenyicons' |
   'topcoat' |
@@ -315,16 +322,20 @@ interface IUmiIconProps extends React.SVGAttributes<SVGElement> {
   flip?: 'vertical' | 'horizontal' | 'horizontal,vertical' | 'vertical,horizontal';
 }
 
-export const Icon = React.forwardRef<HTMLSpanElement, IUmiIconProps>((props, ref) => {
-  const { icon, hover, style, className = '' , rotate, flip, ...extraProps } = props;
+export const getIconComponent = (icon: Pick<IUmiIconProps, 'icon'>) => {
   const iconName = normalizeIconName(alias[icon] || icon);
-  const Component = iconsMap[iconName];
+  return iconsMap[iconName];
+}
+
+export const Icon = React.forwardRef<HTMLSpanElement, IUmiIconProps>((props, ref) => {
+  const { icon, hover, style, className = '' , rotate, spin, flip, ...extraProps } = props;
+  const Component = getIconComponent(icon);
   if (!Component) {
     // TODO: give a error icon when dev, to help developer find the error
     return null;
   }
   const HoverComponent = hover ? iconsMap[normalizeIconName(alias[hover] || hover)] : null;
-  const cls = props.spin ? 'umiIconLoadingCircle' : undefined;
+  const cls = spin ? 'umiIconLoadingCircle' : undefined;
   const svgStyle = {};
   const transform: string[] = [];
   if (rotate) {
@@ -378,7 +389,7 @@ function normalizeRotate(rotate: number | string) {
 }
 
 function camelCase(str: string) {
-  return str.replace(/-([a-z]|[1-9])/g, (g) => g[1].toUpperCase());
+  return str.replace(/\\//g, '-').replace(/-([a-zA-Z]|[1-9])/g, (g) => g[1].toUpperCase());
 }
 
 function normalizeIconName(name: string) {
@@ -428,3 +439,23 @@ function normalizeIconName(name: string) {
     return path.join(api.paths.absSrcPath, 'icons');
   }
 };
+
+function readIconsFromDir(dir: string) {
+  const icons: string[] = [];
+  const prefix = winPath(path.join(dir, './'));
+
+  const collect = (p: string) => {
+    if (fs.statSync(p).isDirectory()) {
+      const files = fs.readdirSync(p);
+      files.forEach((name) => {
+        collect(path.join(p, name));
+      });
+    } else {
+      const prunePath = winPath(p).replace(prefix, '');
+      icons.push(prunePath);
+    }
+  };
+  collect(dir);
+
+  return icons;
+}

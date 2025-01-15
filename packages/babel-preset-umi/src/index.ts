@@ -15,7 +15,7 @@ interface IOpts {
   pluginAutoCSSModules: any;
   stripExports: { exports: string[] };
   classPropertiesLoose: any;
-  pluginStyledComponents: any;
+  pluginDecorators: any;
 }
 
 export default (_context: any, opts: IOpts) => {
@@ -40,7 +40,8 @@ export default (_context: any, opts: IOpts) => {
           ...opts.presetEnv,
         },
       ],
-      [
+      // 允许禁用 preset-react 用于支持 vue 等其他框架
+      opts.presetReact !== false && [
         require.resolve('@umijs/bundler-utils/compiled/babel/preset-react'),
         {
           runtime: 'automatic',
@@ -63,22 +64,19 @@ export default (_context: any, opts: IOpts) => {
           ...opts.presetTypeScript,
         },
       ],
-    ],
+    ].filter(Boolean),
     plugins: [
-      opts.pluginStyledComponents && [
-        require.resolve('babel-plugin-styled-components'),
-        {
-          ...opts.pluginStyledComponents,
-        },
-      ],
       // TC39 Proposals
       // class-static-block
       // decorators
-      [
+      opts.pluginDecorators !== false && [
         require.resolve(
           '@umijs/bundler-utils/compiled/babel/plugin-proposal-decorators',
         ),
-        { legacy: true },
+        {
+          legacy: true,
+          ...opts.pluginDecorators,
+        },
       ],
       // Enable loose mode to use assignment instead of defineProperty
       // Note:

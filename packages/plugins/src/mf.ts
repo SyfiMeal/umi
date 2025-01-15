@@ -1,33 +1,40 @@
-import { existsSync, opendirSync } from 'fs';
+import { parseModule } from '@umijs/bundler-utils';
+import { existsSync, opendirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { IApi } from 'umi';
 import { lodash, winPath } from 'umi/plugin-utils';
+import { TEMPLATES_DIR } from './constants';
 import { toRemotesCodeString } from './utils/mfUtils';
 
 const { isEmpty } = lodash;
 
 const mfSetupPathFileName = '_mf_setup-public-path.js';
 const mfAsyncEntryFileName = 'asyncEntry.ts';
+const MF_TEMPLATES_DIR = join(TEMPLATES_DIR, 'mf');
 
 export default function mf(api: IApi) {
   api.describe({
     key: 'mf',
     config: {
-      schema(Joi) {
-        return Joi.object({
-          name: Joi.string(),
-          remotes: Joi.array().items(
-            Joi.object({
-              aliasName: Joi.string(),
-              name: Joi.string().required(),
-              entry: Joi.string(),
-              entries: Joi.object(),
-              keyResolver: Joi.string(),
-            }),
-          ),
-          shared: Joi.object(),
-          library: Joi.object(),
-        });
+      schema({ zod }) {
+        return zod
+          .object({
+            name: zod.string(),
+            remotes: zod.array(
+              zod.object({
+                aliasName: zod.string().optional(),
+                //  string 上没有 required
+                name: zod.string(),
+                entry: zod.string().optional(),
+                entries: zod.object({}).optional(),
+                keyResolver: zod.string().optional(),
+              }),
+            ),
+            shared: zod.record(zod.any()),
+            library: zod.record(zod.any()),
+            remoteHash: zod.boolean(),
+          })
+          .partial();
       },
     },
     enableBy: api.EnableBy.config,
@@ -47,7 +54,7 @@ export default function mf(api: IApi) {
     }
 
     if (!isEmpty(remotes)) {
-      if (!api.config.mfsu) {
+      if (api.env === 'production' || !api.config.mfsu) {
         changeUmiEntry(config);
       }
     }
@@ -64,7 +71,10 @@ export default function mf(api: IApi) {
       );
     }
 
-    const useHash = api.config.hash && api.env !== 'development';
+    const useHash =
+      typeof api.config.mf.remoteHash === 'boolean'
+        ? api.config.mf.remoteHash
+        : api.config.hash && api.env !== 'development';
 
     const mfConfig = {
       name,
@@ -119,18 +129,56 @@ export default function mf(api: IApi) {
       context: {
         remoteCodeString: toRemotesCodeString(remotes),
       },
-      tplPath: join(__dirname, '../tpls/mf-runtime.ts.tpl'),
+      tplPath: winPath(join(MF_TEMPLATES_DIR, 'runtime.ts.tpl')),
     });
+  });
 
-    if (api.env === 'development' && api.config.mfsu) {
-      // skip mfsu already dynamic import
-      return;
-    }
+  api.register({
+    key: 'onGenerateFiles',
+    // ensure after generate tpm files
+    stage: 10001,
+    fn: async () => {
+      if (api.env === 'development' && api.config.mfsu) {
+        // skip mfsu already dynamic import
+        return;
+      }
 
-    api.writeTmpFile({
-      content: `import('${winPath(join(api.paths.absTmpPath, 'umi.ts'))}')`,
-      path: mfAsyncEntryFileName,
-    });
+      const entry = join(api.paths.absTmpPath, 'umi.ts');
+      const content = readFileSync(
+        join(api.paths.absTmpPath, 'umi.ts'),
+        'utf-8',
+      );
+
+      const [_imports, exports] = await parseModule({ content, path: entry });
+
+      const mfEntryContent: string[] = [];
+      let hasDefaultExport = false;
+      if (exports.length) {
+        mfEntryContent.push(
+          `const umiExports = await import('${winPath(entry)}')`,
+        );
+        for (const exportName of exports) {
+          if (exportName === 'default') {
+            hasDefaultExport = true;
+            mfEntryContent.push(`export default umiExports.${exportName}`);
+          } else {
+            mfEntryContent.push(
+              `export const ${exportName} = umiExports.${exportName}`,
+            );
+          }
+        }
+      } else {
+        mfEntryContent.push(`import('${winPath(entry)}')`);
+      }
+      if (!hasDefaultExport) {
+        mfEntryContent.push('export default 1');
+      }
+
+      api.writeTmpFile({
+        content: mfEntryContent.join('\n'),
+        path: mfAsyncEntryFileName,
+      });
+    },
   });
 
   function formatRemotes() {

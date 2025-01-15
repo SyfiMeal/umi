@@ -9,13 +9,13 @@ import { withTmpPath } from './utils/withTmpPath';
 export default (api: IApi) => {
   api.describe({
     config: {
-      schema(Joi) {
-        return Joi.alternatives().try(
-          Joi.object({
-            extraModels: Joi.array().items(Joi.string()),
-          }),
-          Joi.boolean().invalid(true),
-        );
+      schema({ zod }) {
+        return zod
+          .object({
+            extraModels: zod.array(zod.string()),
+            sort: zod.function().optional(),
+          })
+          .partial();
       },
     },
     enableBy: api.EnableBy.config,
@@ -23,6 +23,9 @@ export default (api: IApi) => {
 
   api.onGenerateFiles(async () => {
     const models = await getAllModels(api);
+    if (api.userConfig.model?.sort) {
+      models.sort(api.userConfig.model.sort);
+    }
 
     // model.ts
     api.writeTmpFile({

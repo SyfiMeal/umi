@@ -6,11 +6,8 @@ import { withTmpPath } from './utils/withTmpPath';
 export default (api: IApi) => {
   api.describe({
     config: {
-      schema(Joi) {
-        return Joi.alternatives().try(
-          Joi.object(),
-          Joi.boolean().invalid(true),
-        );
+      schema({ zod }) {
+        return zod.record(zod.any());
       },
     },
     enableBy: api.EnableBy.config,
@@ -65,7 +62,7 @@ export function accessProvider(container) {
       content: `
 import React, { PropsWithChildren } from 'react';
 import { AccessContext } from './context';
-import type { IRoute } from 'umi';
+import type { IRoute } from '${api.appData.umi.importSource}';
 
 export const useAccess = () => {
   return React.useContext(AccessContext);
