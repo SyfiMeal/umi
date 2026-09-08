@@ -24,11 +24,33 @@ interface IOpts {
   name?: string;
 }
 
+function isReactCompilerPlugin(plugin: any) {
+  const request = Array.isArray(plugin) ? plugin[0] : plugin;
+  return (
+    typeof request === 'string' &&
+    /(^|[/\\])babel-plugin-react-compiler($|[/\\])/.test(request)
+  );
+}
+
 export async function addJavaScriptRules(opts: IOpts) {
   const { config, userConfig, cwd, name } = opts;
   const isDev = opts.env === Env.development;
   const useFastRefresh =
     isDev && userConfig.fastRefresh !== false && name !== MFSU_NAME;
+
+  const babelPlugins = [
+    ...opts.extraBabelPlugins,
+    ...(userConfig.extraBabelPlugins || []),
+  ].filter(Boolean);
+  // Only React Compiler must precede Fast Refresh. Preserve the relative order
+  // of every other plugin, including addBeforeBabelPlugins and hmrGuardian.
+  const plugins = useFastRefresh
+    ? [
+        ...babelPlugins.filter(isReactCompilerPlugin),
+        require.resolve('react-refresh/babel'),
+        ...babelPlugins.filter((plugin) => !isReactCompilerPlugin(plugin)),
+      ]
+    : babelPlugins;
 
   const depPkgs = Object.assign({}, es5ImcompatibleVersionsToPkg());
   const srcRules = [
@@ -159,11 +181,7 @@ export async function addJavaScriptRules(opts: IOpts) {
             ...opts.extraBabelPresets,
             ...(userConfig.extraBabelPresets || []).filter(Boolean),
           ],
-          plugins: [
-            useFastRefresh && require.resolve('react-refresh/babel'),
-            ...opts.extraBabelPlugins,
-            ...(userConfig.extraBabelPlugins || []),
-          ].filter(Boolean),
+          plugins: [...plugins],
         });
     } else if (srcTranspiler === Transpiler.swc) {
       rule
