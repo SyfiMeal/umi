@@ -367,7 +367,11 @@ export default (api: IApi) => {
       context: {
         configProvider,
         appConfig,
-        styleProvider: styleProviderConfig,
+        styleProvider: styleProviderConfig && {
+          ...styleProviderConfig,
+          // Preserve an explicit false instead of omitting it in Mustache.
+          layer: JSON.stringify(styleProviderConfig.layer),
+        },
         // 是否启用了 theme algorithm
         enableModernThemeAlgorithm,
         antdConfigSetter,
